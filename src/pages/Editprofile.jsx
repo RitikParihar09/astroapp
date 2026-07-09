@@ -107,9 +107,11 @@ export default function AstroProfile() {
         {/* Bottom Navigation Home Bar (Optional, matches image footer spacing) */}
         <div className="w-full flex justify-center mb-2 mt-6">
           {/* <div className="w-32 h-1 bg-black/20 rounded-full" /> */}
-         <button className="w-[140px] bg-black text-white py-2 rounded-lg hover:bg-gray-800 transition">
+        <button className="w-[120px] py-3 bg-[#ffb092] text-white rounded-xl">
   Save Changes
 </button>
+        </div>
+
       </div>
     </div>
   );

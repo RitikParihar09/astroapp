@@ -2,6 +2,8 @@ import { Phone } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import logo from "../assets/logo.png";
 
+
+
 function Login() {
   const navigate = useNavigate();
 
@@ -43,7 +45,7 @@ function Login() {
         {/* Continue Button */}
         <div className="flex justify-center">
           <button
-            onClick={() => navigate("/edit-profile")}
+            onClick={() => navigate("/otp")}
             className="w-full max-w-md mt-5 bg-[#ff7448] text-white py-4 rounded-xl text-lg font-semibold hover:bg-[#ff6230] transition"
           >
             Continue
@@ -60,5 +62,10 @@ function Login() {
     </div>
   );
 }
+<button
+  onClick={() => navigate("/otp")}
+>
+  Continue
+</button>
 
 export default Login;
