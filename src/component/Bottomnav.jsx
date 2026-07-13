@@ -1,12 +1,13 @@
+import { MdLiveTv } from "react-icons/md";
 import {
   FaHome,
   FaComments,
   FaPhoneAlt,
   FaUser,
 } from "react-icons/fa";
-import { MdLiveTv } from "react-icons/md";
-
+import { useNavigate } from "react-router-dom";
 function Bottomnav() {
+   const navigate = useNavigate();
   return (
     <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-[320px] h-[60px] bg-white rounded-full shadow-xl px-5 flex justify-between items-center z-50">
 
@@ -38,13 +39,15 @@ function Bottomnav() {
         </span>
       </div>
 
-      <div className="flex flex-col items-center text-gray-500">
-        <FaUser size={25} />
-        <span className="text-[8px] mt-[1px]">
-          Profile
-        </span>
-      </div>
-
+      <div
+  onClick={() => navigate("/profile")}
+  className="flex flex-col items-center text-orange-500 cursor-pointer"
+>
+  <FaUser size={25} />
+  <span className="text-[8px] font-semibold mt-[1px]">
+    Profile
+  </span>
+</div>
     </div>
   );
 }
