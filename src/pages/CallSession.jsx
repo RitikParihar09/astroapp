@@ -108,6 +108,7 @@ export default function CallSession() {
 
     const token = localStorage.getItem("authToken");
     socketRef.current = io("https://kalpjoytish-backend.onrender.com", {
+      transports: ["websocket", "polling"],
       auth: { token }
     });
 

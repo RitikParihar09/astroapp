@@ -18,7 +18,6 @@ import ChatSession from "./pages/ChatSession";
 import CallSession from "./pages/CallSession";
 import Wallet from "./pages/Wallet";
 import Deposit from "./pages/Deposit";
-import CallSession from "./pages/CallSession";
 
 function ProtectedRoute({ children, featureName }) {
   const { isLoggedIn, triggerLoginModal, justLoggedOut } = useAuth();

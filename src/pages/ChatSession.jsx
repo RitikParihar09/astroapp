@@ -89,6 +89,7 @@ export default function ChatSession() {
     // Connect to Socket server
     const token = localStorage.getItem("authToken");
     socketRef.current = io("https://kalpjoytish-backend.onrender.com", {
+      transports: ["websocket", "polling"],
       auth: {
         token: token
       }
