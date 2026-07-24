@@ -166,8 +166,10 @@ export default function EditProfile() {
         const token = localStorage.getItem("authToken");
         const phoneVal = localStorage.getItem("phone");
 
-        const response = await fetch("https://kalpjoytish-backend.onrender.com/api/user/create", {
-          method: "POST",
+        // Since the user has already verified OTP or logged in, a user document 
+        // already exists in the backend DB. We update it via PUT /api/user/profile.
+        const response = await fetch("https://kalpjoytish-backend.onrender.com/api/user/profile", {
+          method: "PUT",
           headers: {
             "Content-Type": "application/json",
             ...(token ? { "Authorization": `Bearer ${token}` } : {})
@@ -184,6 +186,7 @@ export default function EditProfile() {
             }
             const cleanPhone = phoneVal ? phoneVal.replace(/\D/g, "") : Math.random().toString(36).substring(7);
             const userEmail = `${cleanPhone}@kalpjoytish.com`;
+
             return JSON.stringify({
               firstname: formData.firstName,
               middlename: formData.middleName,
@@ -196,7 +199,6 @@ export default function EditProfile() {
               state: formData.state,
               country: formData.country,
               address: formData.address,
-              phone: phoneVal,
               email: userEmail
             });
           })()
@@ -210,17 +212,18 @@ export default function EditProfile() {
           localStorage.setItem("dob", formData.dob || "");
           
           if (data.data) {
-            localStorage.setItem("user", JSON.stringify(data.data));
+            const updatedUser = data.data.user || data.data;
+            localStorage.setItem("user", JSON.stringify(updatedUser));
           }
           
           alert("Profile completed successfully!");
           navigate(location.state?.from || "/home");
         } else {
-          alert(data.message || `Failed to create profile: ${response.statusText}`);
+          alert(data.message || `Failed to save profile: ${response.statusText}`);
         }
       } catch (err) {
-        console.error("Profile Create Error:", err);
-        alert(`Profile creation failed: ${err.message}`);
+        console.error("Profile Save Error:", err);
+        alert(`Profile completion failed: ${err.message}`);
       } finally {
         setIsUpdating(false);
       }
