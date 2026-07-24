@@ -1,0 +1,703 @@
+import React, { useState, useEffect, useRef } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { io } from "socket.io-client";
+import AgoraRTC from "agora-rtc-sdk-ng";
+import { Mic, MicOff, Video, VideoOff, PhoneOff, Star, AlertTriangle, Clock, Wallet, CheckCircle } from "lucide-react";
+import { useAuth } from "../context/AuthContext";
+
+export default function CallSession() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { isLoggedIn, triggerLoginModal } = useAuth();
+
+  // Retrieve params passed via route state
+  const { astrologer, callType: initialCallType, sessionId, channelName: initialChannelName } = location.state || {};
+
+  const userObj = JSON.parse(localStorage.getItem("user") || "{}");
+  const userId = userObj._id || userObj.id || "";
+
+  // Call states: PENDING, ACTIVE, COMPLETED, REJECTED, MISSED, CANCELLED
+  const [sessionStatus, setSessionStatus] = useState("PENDING");
+  const [callType, setCallType] = useState(initialCallType || "AUDIO");
+  const [channelName, setChannelName] = useState(initialChannelName || "");
+  const [ratePerMinute, setRatePerMinute] = useState(astrologer?.priceRaw || 0);
+
+  // Stats & controls
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [remainingBalance, setRemainingBalance] = useState(null);
+  const [showWarning, setShowWarning] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isCameraOff, setIsCameraOff] = useState(false);
+  const [peerAudioMuted, setPeerAudioMuted] = useState(false);
+  const [peerVideoMuted, setPeerVideoMuted] = useState(false);
+  
+  // Rating and review state
+  const [rating, setRating] = useState(5);
+  const [review, setReview] = useState("");
+  const [submittingRate, setSubmittingRate] = useState(false);
+  const [summaryData, setSummaryData] = useState(null);
+
+  // Refs for Agora RTC
+  const clientRef = useRef(null);
+  const localAudioTrackRef = useRef(null);
+  const localVideoTrackRef = useRef(null);
+  const socketRef = useRef(null);
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const timerRef = useRef(null);
+
+  // Format second timer to MM:SS
+  const formatTime = (totalSecs) => {
+    const mins = Math.floor(totalSecs / 60);
+    const secs = totalSecs % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  // Local Timer tick for smooth UI counter
+  useEffect(() => {
+    if (sessionStatus === "ACTIVE") {
+      timerRef.current = setInterval(() => {
+        setElapsedSeconds((prev) => prev + 1);
+      }, 1000);
+    } else {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    }
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    };
+  }, [sessionStatus]);
+
+  // Clean up Agora tracks & client
+  const cleanupCall = async () => {
+    if (localAudioTrackRef.current) {
+      localAudioTrackRef.current.stop();
+      localAudioTrackRef.current.close();
+      localAudioTrackRef.current = null;
+    }
+    if (localVideoTrackRef.current) {
+      localVideoTrackRef.current.stop();
+      localVideoTrackRef.current.close();
+      localVideoTrackRef.current = null;
+    }
+    if (clientRef.current) {
+      try {
+        await clientRef.current.leave();
+      } catch (e) {
+        console.error("Error leaving Agora channel:", e);
+      }
+      clientRef.current = null;
+    }
+  };
+
+  // Socket & Signaling connection
+  useEffect(() => {
+    if (!isLoggedIn) {
+      triggerLoginModal("Call Session", "/call");
+      return;
+    }
+
+    if (!sessionId) {
+      alert("Invalid Call Session. Redirecting to call list.");
+      navigate("/call");
+      return;
+    }
+
+    const token = localStorage.getItem("authToken");
+    socketRef.current = io("https://kalpjoytish-backend.onrender.com", {
+      auth: { token }
+    });
+
+    const socket = socketRef.current;
+
+    socket.on("connect", () => {
+      console.log("Connected to Calling Socket room:", socket.id);
+      socket.emit("register_user", { userId });
+      socket.emit("join_call_room", { sessionId });
+    });
+
+    // Handle acceptance from astrologer
+    socket.on("call_accepted", async (data) => {
+      console.log("📞 Call accepted by astrologer:", data);
+      const appID = data.agora?.appId || data.appId || data.appID;
+      const channel = data.channelName || data.agora?.channelName || channelName;
+      const rtcToken = data.agora?.token || data.token || data.rtcToken;
+      const callMode = data.session?.callType || data.callType || callType;
+
+      setCallType(callMode);
+      setChannelName(channel);
+
+      // Initialize Agora on acceptance
+      await initAgora(appID, channel, rtcToken, callMode);
+    });
+
+    // If accepted immediately or status updates on mount
+    socket.on("session_active", () => {
+      if (sessionStatus !== "ACTIVE") {
+        setSessionStatus("ACTIVE");
+      }
+    });
+
+    // Real-time billing timer tick
+    socket.on("timer_tick", (data) => {
+      if (data) {
+        if (data.remainingBalance !== undefined) setRemainingBalance(data.remainingBalance);
+        if (data.elapsedMinutes !== undefined) {
+          const computedSecs = data.elapsedMinutes * 60;
+          if (Math.abs(computedSecs - elapsedSeconds) > 60) {
+            setElapsedSeconds(computedSecs);
+          }
+        }
+      }
+    });
+
+    // Wallet warning
+    socket.on("wallet_warning", (data) => {
+      setShowWarning(true);
+      if (data?.remainingBalance !== undefined) {
+        setRemainingBalance(data.remainingBalance);
+      }
+      setTimeout(() => setShowWarning(false), 8000);
+    });
+
+    // Peer media state updates
+    socket.on("peer_media_state_changed", (data) => {
+      console.log("Peer media state changed:", data);
+      if (data) {
+        if (data.isAudioMuted !== undefined) setPeerAudioMuted(data.isAudioMuted);
+        if (data.isVideoMuted !== undefined) setPeerVideoMuted(data.isVideoMuted);
+      }
+    });
+
+    // Call End event handlers
+    const endCallFlow = (data) => {
+      console.log("🔴 Call ended from backend/astrologer:", data);
+      cleanupCall();
+      setSessionStatus("COMPLETED");
+
+      const sessionObj = data?.session || data?.data || data;
+      const finalDuration = sessionObj?.totalDurationMinutes || Math.max(1, Math.ceil(elapsedSeconds / 60));
+      const finalCost = sessionObj?.totalAmountDeducted || (finalDuration * ratePerMinute);
+
+      setSummaryData({
+        totalDurationMinutes: finalDuration,
+        totalAmountDeducted: finalCost
+      });
+
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    };
+
+    socket.on("call_rejected", (data) => {
+      alert(data?.reason ? `Call rejected: ${data.reason}` : "Call was declined by the astrologer.");
+      if (socketRef.current) socketRef.current.disconnect();
+      navigate("/call");
+    });
+
+    socket.on("call_missed", () => {
+      alert("Call was not answered.");
+      if (socketRef.current) socketRef.current.disconnect();
+      navigate("/call");
+    });
+
+    socket.on("call_timeout", () => {
+      alert("Call connection timed out.");
+      if (socketRef.current) socketRef.current.disconnect();
+      navigate("/call");
+    });
+
+    socket.on("call_ended", endCallFlow);
+    socket.on("call_session_ended", endCallFlow);
+    socket.on("end_call", endCallFlow);
+    socket.on("session_ended", endCallFlow);
+    socket.on("call_ended_insufficient_funds", (data) => {
+      alert("Call ended due to insufficient wallet balance.");
+      endCallFlow(data);
+    });
+
+    return () => {
+      cleanupCall();
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    };
+  }, [sessionId, isLoggedIn]);
+
+  // Agora SDK Integration logic
+  const initAgora = async (appId, channelName, rtcToken, mode) => {
+    try {
+      await cleanupCall();
+
+      const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+      clientRef.current = client;
+
+      // Subscribe to remote streams
+      client.on("user-published", async (user, mediaType) => {
+        await client.subscribe(user, mediaType);
+        console.log("Subscribed to astrologer track:", user.uid, mediaType);
+        
+        if (mediaType === "video") {
+          if (remoteVideoRef.current) {
+            user.videoTrack.play(remoteVideoRef.current);
+          }
+        }
+        if (mediaType === "audio") {
+          user.audioTrack.play();
+        }
+      });
+
+      client.on("user-left", (user) => {
+        console.log("Astrologer left the channel:", user.uid);
+        handleEndCall();
+      });
+
+      // Join the channel
+      await client.join(appId, channelName, rtcToken, null);
+
+      // Create local tracks and publish
+      if (mode === "VIDEO") {
+        const [audioTrack, videoTrack] = await AgoraRTC.createMicrophoneAndCameraTracks();
+        localAudioTrackRef.current = audioTrack;
+        localVideoTrackRef.current = videoTrack;
+
+        if (localVideoRef.current) {
+          videoTrack.play(localVideoRef.current);
+        }
+
+        await client.publish([audioTrack, videoTrack]);
+      } else {
+        const audioTrack = await AgoraRTC.createMicrophoneAudioTrack();
+        localAudioTrackRef.current = audioTrack;
+
+        await client.publish([audioTrack]);
+      }
+
+      setSessionStatus("ACTIVE");
+    } catch (err) {
+      console.error("Agora configuration failed:", err);
+      alert("Could not start audio/video streaming: " + err.message);
+      handleEndCall();
+    }
+  };
+
+  // Mute local microphone
+  const toggleMute = async () => {
+    if (localAudioTrackRef.current) {
+      try {
+        const nextState = !isMuted;
+        await localAudioTrackRef.current.setEnabled(!nextState);
+        setIsMuted(nextState);
+        socketRef.current?.emit("media_state_change", {
+          sessionId,
+          isAudioMuted: nextState,
+          isVideoMuted: isCameraOff
+        });
+      } catch (err) {
+        console.error("Mute toggle failed:", err);
+      }
+    }
+  };
+
+  // Disable/Enable local webcam
+  const toggleCamera = async () => {
+    if (localVideoTrackRef.current) {
+      try {
+        const nextState = !isCameraOff;
+        await localVideoTrackRef.current.setEnabled(!nextState);
+        setIsCameraOff(nextState);
+        socketRef.current?.emit("media_state_change", {
+          sessionId,
+          isAudioMuted: isMuted,
+          isVideoMuted: nextState
+        });
+      } catch (err) {
+        console.error("Camera toggle failed:", err);
+      }
+    }
+  };
+
+  // Terminate call manually
+  const handleEndCall = async () => {
+    try {
+      // Emit socket event to end call session
+      socketRef.current?.emit("end_call_session", { sessionId });
+
+      const token = localStorage.getItem("authToken");
+      const response = await fetch(`https://kalpjoytish-backend.onrender.com/api/video-session/end/${sessionId}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "Authorization": `Bearer ${token}` } : {})
+        }
+      });
+
+      const resData = await response.json();
+      cleanupCall();
+      setSessionStatus("COMPLETED");
+
+      const sessionObj = resData.data || {};
+      const finalDuration = sessionObj.totalDurationMinutes || Math.max(1, Math.ceil(elapsedSeconds / 60));
+      const finalCost = sessionObj.totalAmountDeducted || (finalDuration * ratePerMinute);
+
+      setSummaryData({
+        totalDurationMinutes: finalDuration,
+        totalAmountDeducted: finalCost
+      });
+
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    } catch (err) {
+      console.error("Error ending call:", err);
+      // Fallback local cleanup
+      cleanupCall();
+      setSessionStatus("COMPLETED");
+      setSummaryData({
+        totalDurationMinutes: Math.max(1, Math.ceil(elapsedSeconds / 60)),
+        totalAmountDeducted: Math.max(1, Math.ceil(elapsedSeconds / 60)) * ratePerMinute
+      });
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    }
+  };
+
+  // Rate call session
+  const handleRateSession = async (e) => {
+    e.preventDefault();
+    setSubmittingRate(true);
+    try {
+      const token = localStorage.getItem("authToken");
+      let response = await fetch("https://kalpjoytish-backend.onrender.com/api/video-session/rate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "Authorization": `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          sessionId,
+          rating,
+          review
+        })
+      });
+
+      if (!response.ok) {
+        response = await fetch("https://kalpjoytish-backend.onrender.com/api/call/rate", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { "Authorization": `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({
+            sessionId,
+            rating,
+            review
+          })
+        });
+      }
+      alert("Thank you for your valuable feedback!");
+    } catch (err) {
+      console.error("Rating submission error:", err);
+    } finally {
+      setSubmittingRate(false);
+      navigate("/call");
+    }
+  };
+
+  // --- RENDER VIEWS ---
+
+  // 1. PENDING (Ringing Outgoing) View
+  if (sessionStatus === "PENDING") {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-[#111827] to-[#1F2937] flex justify-center text-white">
+        <div className="w-full max-w-[430px] flex flex-col justify-between items-center p-8 relative">
+          
+          {/* Header */}
+          <div className="text-center mt-12 space-y-2">
+            <span className="bg-orange-500/10 text-orange-400 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wider border border-orange-500/20">
+              Outgoing Call
+            </span>
+            <h2 className="text-2xl font-bold mt-4">{astrologer?.name || "Astrologer"}</h2>
+            <p className="text-gray-400 text-sm animate-pulse">Calling...</p>
+          </div>
+
+          {/* Visual Pulsing Avatar Container */}
+          <div className="relative my-auto flex items-center justify-center">
+            <div className="absolute w-48 h-48 bg-orange-500/10 rounded-full animate-ping duration-1000"></div>
+            <div className="absolute w-40 h-40 bg-orange-500/20 rounded-full animate-pulse duration-700"></div>
+            <div className="w-32 h-32 rounded-full overflow-hidden border-4 border-orange-500/40 relative z-10 shadow-2xl">
+              <img
+                src={astrologer?.image || "https://randomuser.me/api/portraits/women/65.jpg"}
+                alt={astrologer?.name}
+                className="w-full h-full object-cover"
+              />
+            </div>
+          </div>
+
+          {/* Cancel button */}
+          <div className="mb-12">
+            <button
+              onClick={handleEndCall}
+              className="w-16 h-16 rounded-full bg-red-600 hover:bg-red-700 flex items-center justify-center shadow-lg hover:shadow-red-600/30 active:scale-95 transition-all cursor-pointer"
+            >
+              <PhoneOff size={24} className="text-white" />
+            </button>
+            <p className="text-center text-xs text-gray-400 mt-2">Cancel Call</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. ACTIVE Calling Screen View
+  if (sessionStatus === "ACTIVE") {
+    const isVideo = callType === "VIDEO";
+
+    return (
+      <div className="min-h-screen bg-[#111827] flex justify-center text-white relative">
+        <div className="w-full max-w-[430px] flex flex-col justify-between items-center relative overflow-hidden">
+          
+          {/* Low Balance Warning Banner */}
+          {showWarning && (
+            <div className="absolute top-4 left-4 right-4 z-50 bg-yellow-500 text-black px-4 py-3 rounded-2xl flex items-center gap-2 shadow-lg animate-bounce">
+              <AlertTriangle size={20} className="flex-shrink-0" />
+              <p className="text-xs font-bold">Low balance! Call will automatically end in less than 1 minute.</p>
+            </div>
+          )}
+
+          {/* Time & Cost indicator overlay */}
+          <div className="absolute top-6 left-1/2 -translate-x-1/2 z-40 bg-black/40 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 flex items-center gap-3">
+            <Clock size={14} className="text-orange-400" />
+            <span className="font-mono text-sm tracking-wider">{formatTime(elapsedSeconds)}</span>
+            <span className="text-white/40 text-xs">|</span>
+            <span className="text-xs font-bold text-orange-400">₹{ratePerMinute}/min</span>
+          </div>
+
+          {/* Peer muted indicators overlay */}
+          {(peerAudioMuted || peerVideoMuted) && (
+            <div className="absolute top-20 left-4 z-40 flex flex-col gap-2">
+              {peerAudioMuted && (
+                <div className="bg-red-500/80 backdrop-blur-sm px-3 py-1.5 rounded-xl border border-red-500/20 flex items-center gap-1.5 text-xs font-bold">
+                  <MicOff size={12} />
+                  <span>Astro Muted</span>
+                </div>
+              )}
+              {peerVideoMuted && isVideo && (
+                <div className="bg-red-500/80 backdrop-blur-sm px-3 py-1.5 rounded-xl border border-red-500/20 flex items-center gap-1.5 text-xs font-bold">
+                  <VideoOff size={12} />
+                  <span>Astro Video Off</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Video Streams Container */}
+          {isVideo ? (
+            <div className="absolute inset-0 w-full h-full bg-black z-0">
+              
+              {/* Fullscreen Remote Astrologer Video */}
+              <div 
+                ref={remoteVideoRef} 
+                className="w-full h-full object-cover flex items-center justify-center relative"
+              >
+                {/* Fallback image if remote stream is not loaded or peer camera is off */}
+                {peerVideoMuted ? (
+                  <div className="absolute inset-0 flex flex-col justify-center items-center bg-[#1F2937] z-10">
+                    <img
+                      src={astrologer?.image}
+                      alt={astrologer?.name}
+                      className="w-24 h-24 rounded-full border border-orange-500/40 opacity-70 blur-[1px]"
+                    />
+                    <p className="text-xs text-gray-400 mt-3">Astrologer's camera is off</p>
+                  </div>
+                ) : (
+                  <div className="absolute inset-0 flex flex-col justify-center items-center bg-[#1F2937]">
+                    <img
+                      src={astrologer?.image}
+                      alt={astrologer?.name}
+                      className="w-24 h-24 rounded-full border border-orange-500/40 opacity-70 blur-[1px]"
+                    />
+                    <p className="text-xs text-gray-400 mt-3">Connecting video stream...</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Local Video Thumbnail Container (Floating picture-in-picture) */}
+              <div className="absolute top-20 right-4 w-28 h-40 bg-zinc-900 rounded-xl overflow-hidden border-2 border-white/20 z-20 shadow-xl">
+                <div 
+                  ref={localVideoRef} 
+                  className="w-full h-full object-cover"
+                />
+                {isCameraOff && (
+                  <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
+                    <VideoOff size={16} className="text-gray-500" />
+                  </div>
+                )}
+              </div>
+
+            </div>
+          ) : (
+            // Audio Call Mode UI Layout
+            <div className="flex flex-col items-center justify-center my-auto space-y-6 z-10 mt-24">
+              <div className="relative">
+                <div className="absolute -inset-4 bg-orange-500/10 rounded-full blur-xl animate-pulse"></div>
+                <div className="w-36 h-36 rounded-full overflow-hidden border-4 border-orange-500 shadow-2xl relative">
+                  <img
+                    src={astrologer?.image || "https://randomuser.me/api/portraits/women/65.jpg"}
+                    alt={astrologer?.name}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              </div>
+
+              <div className="text-center space-y-1">
+                <h3 className="text-2xl font-bold">{astrologer?.name || "Astrologer"}</h3>
+                <p className="text-green-400 text-xs font-bold tracking-wider uppercase flex items-center gap-1.5 justify-center">
+                  <span className="w-2 h-2 rounded-full bg-green-400 animate-ping"></span>
+                  Active Voice Call
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Action Bar Overlay */}
+          <div className="w-full px-8 pb-12 pt-6 bg-gradient-to-t from-black/80 via-black/40 to-transparent z-10 flex flex-col items-center gap-4">
+            <div className="flex items-center gap-6">
+              
+              {/* Mic Control */}
+              <button
+                onClick={toggleMute}
+                className={`w-14 h-14 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                  isMuted ? "bg-red-500/20 border border-red-500 text-red-500" : "bg-white/10 hover:bg-white/20 border border-white/10 text-white"
+                }`}
+              >
+                {isMuted ? <MicOff size={20} /> : <Mic size={20} />}
+              </button>
+
+              {/* Hangup Call */}
+              <button
+                onClick={handleEndCall}
+                className="w-16 h-16 rounded-full bg-red-600 hover:bg-red-700 flex items-center justify-center shadow-lg hover:shadow-red-600/40 active:scale-95 transition-all cursor-pointer"
+              >
+                <PhoneOff size={24} className="text-white" />
+              </button>
+
+              {/* Camera Toggle (Video Call Only) */}
+              {isVideo ? (
+                <button
+                  onClick={toggleCamera}
+                  className={`w-14 h-14 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                    isCameraOff ? "bg-red-500/20 border border-red-500 text-red-500" : "bg-white/10 hover:bg-white/20 border border-white/10 text-white"
+                  }`}
+                >
+                  {isCameraOff ? <VideoOff size={20} /> : <Video size={20} />}
+                </button>
+              ) : (
+                <div className="w-14 h-14"></div> // Spacer for layout balance
+              )}
+
+            </div>
+            
+            <p className="text-xs text-white/50 tracking-wider">Tap red button to end call</p>
+          </div>
+
+        </div>
+      </div>
+    );
+  }
+
+  // 3. COMPLETED Call summary and rating screen
+  if (sessionStatus === "COMPLETED") {
+    return (
+      <div className="min-h-screen bg-[#F9FAFB] flex justify-center text-gray-900">
+        <div className="w-full max-w-[430px] bg-white min-h-screen flex flex-col justify-between p-6 shadow-xl relative">
+          
+          <div className="flex-1 flex flex-col justify-center items-center py-8">
+            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-6">
+              <CheckCircle size={36} className="text-green-600" />
+            </div>
+
+            <h2 className="text-2xl font-bold text-gray-900">Call Finished</h2>
+            <p className="text-sm text-gray-500 mt-1">Thank you for consulting with {astrologer?.name || "us"}</p>
+
+            {/* Receipt Summary Card */}
+            <div className="w-full bg-[#F3F4F6] rounded-3xl p-5 mt-8 space-y-4 border border-gray-100">
+              <div className="flex justify-between items-center text-sm border-b border-gray-200/60 pb-3">
+                <span className="text-gray-500 font-medium">Duration</span>
+                <span className="font-bold text-gray-800">{summaryData?.totalDurationMinutes || 1} min</span>
+              </div>
+              <div className="flex justify-between items-center text-sm border-b border-gray-200/60 pb-3">
+                <span className="text-gray-500 font-medium">Rate per minute</span>
+                <span className="font-bold text-gray-800">₹{ratePerMinute}/min</span>
+              </div>
+              <div className="flex justify-between items-center text-base pt-1">
+                <span className="text-gray-900 font-bold">Total Charged</span>
+                <span className="font-extrabold text-orange-600 text-lg">₹{summaryData?.totalAmountDeducted || 0}</span>
+              </div>
+            </div>
+
+            {/* Rating Stars Form */}
+            <form onSubmit={handleRateSession} className="w-full mt-8 space-y-5">
+              <div className="text-center space-y-2">
+                <label className="block text-sm font-bold text-gray-700">How was your call experience?</label>
+                <div className="flex items-center justify-center gap-2 mt-1">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      type="button"
+                      onClick={() => setRating(star)}
+                      className="focus:outline-none transition-transform hover:scale-110"
+                    >
+                      <Star
+                        size={28}
+                        className={`${
+                          star <= rating
+                            ? "fill-yellow-400 text-yellow-400"
+                            : "text-gray-300"
+                        }`}
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider">Leave a Review (Optional)</label>
+                <textarea
+                  value={review}
+                  onChange={(e) => setReview(e.target.value)}
+                  placeholder="Tell us what you liked or how the astrologer helped..."
+                  className="w-full border border-gray-200 rounded-2xl p-4 text-sm outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 h-24 resize-none transition-all placeholder:text-gray-400 bg-gray-50"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={submittingRate}
+                className="w-full py-4 rounded-full bg-gradient-to-r from-orange-500 to-orange-400 hover:from-orange-600 hover:to-orange-500 text-white text-sm font-bold shadow-lg hover:shadow-orange-500/20 transition-all cursor-pointer active:scale-95 disabled:opacity-50"
+              >
+                {submittingRate ? "Submitting..." : "Submit Review"}
+              </button>
+            </form>
+          </div>
+
+          <div className="text-center">
+            <button
+              onClick={() => navigate("/call")}
+              className="text-sm font-bold text-gray-500 hover:text-gray-700 cursor-pointer"
+            >
+              Skip Rating & Back to Calls
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Fallback for other ending statuses (missed, rejected, cancelled, etc.)
+  return null;
+}

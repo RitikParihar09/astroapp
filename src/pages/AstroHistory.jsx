@@ -63,28 +63,67 @@ export default function AstroHistory() {
       }
       try {
         const token = localStorage.getItem("authToken");
-        const response = await fetch(`https://kalpjoytish-backend.onrender.com/api/chat/sessions?userId=${userId}`, {
-          headers: {
-            "Authorization": `Bearer ${token}`
+        const headers = token ? { "Authorization": `Bearer ${token}` } : {};
+
+        // Fetch both chat sessions and video/audio sessions in parallel
+        const [chatRes, callRes] = await Promise.allSettled([
+          fetch(`https://kalpjoytish-backend.onrender.com/api/chat/sessions?userId=${userId}`, { headers }),
+          fetch(`https://kalpjoytish-backend.onrender.com/api/video-session/history?userId=${userId}&role=user`, { headers })
+        ]);
+
+        let formattedChats = [];
+        let formattedCalls = [];
+
+        if (chatRes.status === "fulfilled" && chatRes.value.ok) {
+          const chatJson = await chatRes.value.json();
+          if (chatJson.success && chatJson.data) {
+            formattedChats = chatJson.data.map(session => {
+              const dateStr = session.startTime || session.createdAt || new Date();
+              return {
+                id: session._id,
+                name: session.astrologerId?.name || "Astrologer",
+                type: "Chat Session",
+                mode: "chat",
+                dateObj: new Date(dateStr),
+                date: new Date(dateStr).toLocaleDateString([], {
+                  day: 'numeric', month: 'short', year: 'numeric'
+                }),
+                duration: `${session.totalDurationMinutes || 0} min`,
+                price: `₹${session.perMinuteRate || 0} / min`,
+                total: `₹${session.totalAmountDeducted || 0}`,
+                status: session.status === 'COMPLETED' ? 'Completed' : session.status
+              };
+            });
           }
-        });
-        const resData = await response.json();
-        if (response.ok && resData.success && resData.data && resData.data.length > 0) {
-          // Format sessions to match HistoryCard expected schema
-          const formatted = resData.data.map(session => ({
-            id: session._id,
-            name: session.astrologerId?.name || "Astrologer",
-            type: "Chat Session",
-            mode: "chat",
-            date: new Date(session.startTime || session.createdAt).toLocaleDateString([], {
-              day: 'numeric', month: 'short', year: 'numeric'
-            }),
-            duration: `${session.totalDurationMinutes || 0} min`,
-            price: `₹${session.perMinuteRate || 0} / min`,
-            total: `₹${session.totalAmountDeducted || 0}`,
-            status: session.status === 'COMPLETED' ? 'Completed' : session.status
-          }));
-          setHistory(formatted);
+        }
+
+        if (callRes.status === "fulfilled" && callRes.value.ok) {
+          const callJson = await callRes.value.json();
+          if (callJson.success && callJson.data) {
+            formattedCalls = callJson.data.map(session => {
+              const dateStr = session.startTime || session.createdAt || new Date();
+              return {
+                id: session._id,
+                name: session.astrologer?.name || "Astrologer",
+                type: `${session.callType === 'VIDEO' ? 'Video' : 'Audio'} Call`,
+                mode: "call",
+                dateObj: new Date(dateStr),
+                date: new Date(dateStr).toLocaleDateString([], {
+                  day: 'numeric', month: 'short', year: 'numeric'
+                }),
+                duration: `${session.totalDurationMinutes || 0} min`,
+                price: `₹${session.astrologer?.consultationFee || session.perMinuteRate || 0} / min`,
+                total: `₹${session.totalAmountDeducted || 0}`,
+                status: session.status === 'COMPLETED' ? 'Completed' : session.status
+              };
+            });
+          }
+        }
+
+        const combined = [...formattedChats, ...formattedCalls];
+        if (combined.length > 0) {
+          combined.sort((a, b) => b.dateObj - a.dateObj);
+          setHistory(combined);
         } else {
           setHistory(mockHistory);
         }

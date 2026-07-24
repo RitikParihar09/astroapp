@@ -6,6 +6,7 @@ import { useAuth } from "../context/AuthContext";
 function AstrologerCard({ item }) {
   const { isLoggedIn, triggerLoginModal } = useAuth();
   const navigate = useNavigate();
+  const [loadingCall, setLoadingCall] = useState(null); // "AUDIO" | "VIDEO" | null
 
   const data = item || {
     name: "Sumit Kumar",
@@ -41,6 +42,65 @@ function AstrologerCard({ item }) {
       localStorage.setItem("followedAstrologers", JSON.stringify(updated));
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleStartCall = async (type) => {
+    if (!isLoggedIn) {
+      triggerLoginModal(`${type === "VIDEO" ? "Video" : "Audio"} Call`, "/call");
+      return;
+    }
+
+    setLoadingCall(type);
+    try {
+      const token = localStorage.getItem("authToken");
+      const userObj = JSON.parse(localStorage.getItem("user") || "{}");
+      const userId = userObj._id || userObj.id || "";
+      const astroId = data.id || data._id;
+
+      const response = await fetch("https://kalpjoytish-backend.onrender.com/api/video-session/request", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "Authorization": `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          userId: userId,
+          astrologerId: astroId,
+          callType: type
+        })
+      });
+
+      const resData = await response.json();
+
+      if (response.ok && resData.success) {
+        // Format price raw value
+        const priceCleaned = data.priceRaw || parseInt(data.price?.replace(/[^\d]/g, "")) || 0;
+        
+        navigate("/call-session", { 
+          state: { 
+            astrologer: {
+              ...data,
+              priceRaw: priceCleaned
+            },
+            callType: type,
+            sessionId: resData.data?._id || resData.data?.sessionId,
+            channelName: resData.data?.channelName
+          } 
+        });
+      } else {
+        if (resData.message && (resData.message.toLowerCase().includes("balance") || resData.message.toLowerCase().includes("wallet") || resData.message.toLowerCase().includes("insufficient"))) {
+          alert(resData.message || "Insufficient wallet balance. Please recharge your wallet to start a call.");
+          navigate("/wallet");
+        } else {
+          alert(resData.message || "Failed to initiate call session.");
+        }
+      }
+    } catch (error) {
+      console.error("Start Call Error:", error);
+      alert(`Error starting call: ${error.message}`);
+    } finally {
+      setLoadingCall(null);
     }
   };
 
@@ -91,11 +151,11 @@ function AstrologerCard({ item }) {
           </div>
 
           <p className="text-xs text-gray-500 mt-1 leading-normal truncate">
-            {data.skills}
+            {data.skills || data.skill}
           </p>
 
           <p className="text-[10px] font-bold text-gray-400 mt-0.5 uppercase tracking-wider">
-            Exp: {data.experience}
+            Exp: {data.experience || data.exp}
           </p>
 
           <div className="flex items-center gap-3 mt-2">
@@ -122,31 +182,21 @@ function AstrologerCard({ item }) {
       <div className="flex flex-col gap-2 flex-shrink-0">
 
         <button
-          onClick={() => {
-            if (!isLoggedIn) {
-              triggerLoginModal("Audio Call", "/call");
-            } else {
-              alert(`Initiating Audio Call with ${data.name}...`);
-            }
-          }}
-          className="w-[96px] py-2.5 rounded-full bg-[#EBF7EE] text-[#2EA248] hover:bg-[#d8eedc] text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95"
+          disabled={loadingCall !== null}
+          onClick={() => handleStartCall("AUDIO")}
+          className="w-[96px] py-2.5 rounded-full bg-[#EBF7EE] text-[#2EA248] hover:bg-[#d8eedc] text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95 disabled:opacity-50"
         >
           <Phone size={13} className="fill-current" />
-          Audio
+          {loadingCall === "AUDIO" ? "..." : "Audio"}
         </button>
 
         <button
-          onClick={() => {
-            if (!isLoggedIn) {
-              triggerLoginModal("Video Call", "/call");
-            } else {
-              alert(`Initiating Video Call with ${data.name}...`);
-            }
-          }}
-          className="w-[96px] py-2.5 rounded-full bg-[#FFF2EC] text-[#FF6F3D] hover:bg-[#ffe5d9] text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95"
+          disabled={loadingCall !== null}
+          onClick={() => handleStartCall("VIDEO")}
+          className="w-[96px] py-2.5 rounded-full bg-[#FFF2EC] text-[#FF6F3D] hover:bg-[#ffe5d9] text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95 disabled:opacity-50"
         >
           <Video size={13} className="fill-current" />
-          Video
+          {loadingCall === "VIDEO" ? "..." : "Video"}
         </button>
 
       </div>

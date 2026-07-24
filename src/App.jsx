@@ -17,6 +17,7 @@ import LiveAstro from "./pages/LiveAstro";
 import ChatSession from "./pages/ChatSession";
 import Wallet from "./pages/Wallet";
 import Deposit from "./pages/Deposit";
+import CallSession from "./pages/CallSession";
 
 function ProtectedRoute({ children, featureName }) {
   const { isLoggedIn, triggerLoginModal, justLoggedOut } = useAuth();
@@ -95,6 +96,14 @@ function AppContent() {
           element={
             <ProtectedRoute featureName="Deposit">
               <Deposit />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/call-session"
+          element={
+            <ProtectedRoute featureName="Call Session">
+              <CallSession />
             </ProtectedRoute>
           }
         />

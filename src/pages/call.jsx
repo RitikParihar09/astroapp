@@ -1,10 +1,11 @@
+import React, { useState, useEffect } from "react";
 import CallHeader from "../component/CallHeader";
 import CallSearchBar from "../component/CallSearchBar";
 import CategoryTabs from "../component/CategoryTabs";
 import AstrologerCard from "../component/AstrologerCard";
 import Bottomnav from "../component/Bottomnav";
 
-const astrologersList = [
+const defaultAstrologers = [
   {
     id: 1,
     name: "Astro Sumit",
@@ -12,6 +13,7 @@ const astrologersList = [
     experience: "5 Years",
     rating: "4.9",
     price: "₹30/min",
+    priceRaw: 30,
     image: "https://i.pravatar.cc/200?img=12",
     tag: "Top Rated"
   },
@@ -22,6 +24,7 @@ const astrologersList = [
     experience: "8 Years",
     rating: "4.8",
     price: "₹25/min",
+    priceRaw: 25,
     image: "https://i.pravatar.cc/200?img=33",
     tag: "Trending"
   },
@@ -32,6 +35,7 @@ const astrologersList = [
     experience: "6 Years",
     rating: "4.9",
     price: "₹35/min",
+    priceRaw: 35,
     image: "https://i.pravatar.cc/200?img=47",
     tag: "Popular"
   },
@@ -42,6 +46,7 @@ const astrologersList = [
     experience: "10 Years",
     rating: "5.0",
     price: "₹40/min",
+    priceRaw: 40,
     image: "https://i.pravatar.cc/200?img=68",
     tag: "Top Rated"
   },
@@ -52,12 +57,49 @@ const astrologersList = [
     experience: "4 Years",
     rating: "4.7",
     price: "₹20/min",
+    priceRaw: 20,
     image: "https://i.pravatar.cc/200?img=49",
     tag: "New"
   }
 ];
 
 function Call() {
+  const [astrologers, setAstrologers] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchOnlineAstrologers = async () => {
+      try {
+        const response = await fetch("https://kalpjoytish-backend.onrender.com/api/astro/all?online=true");
+        const resData = await response.json();
+        
+        if (response.ok && resData.success && resData.data && resData.data.length > 0) {
+          const formatted = resData.data.map(astro => ({
+            id: astro._id || astro.id,
+            name: astro.name || "Astrologer",
+            skills: (astro.specialization && astro.specialization.join(", ")) || "Kundli, Vastu, Marriage",
+            experience: astro.experience || "5 Years",
+            rating: astro.rating || "4.8",
+            price: astro.consultationFee ? `₹${astro.consultationFee}/min` : "₹15/min",
+            priceRaw: astro.consultationFee || 15,
+            image: astro.profileImage || `https://i.pravatar.cc/200?img=${Math.floor(Math.random() * 70) + 1}`,
+            tag: astro.tag || (astro.rating >= 4.9 ? "Top Rated" : "")
+          }));
+          setAstrologers(formatted);
+        } else {
+          setAstrologers(defaultAstrologers);
+        }
+      } catch (error) {
+        console.error("Fetch astrologers error in call page:", error);
+        setAstrologers(defaultAstrologers);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchOnlineAstrologers();
+  }, []);
+
   return (
     <div className="min-h-screen bg-[#F7F7F7] flex justify-center">
 
@@ -80,11 +122,22 @@ function Call() {
             <CategoryTabs />
           </div>
 
-          {/* Astrologers */}
+          {/* Astrologers list */}
           <div className="px-5 mt-6 space-y-4">
-            {astrologersList.map((astro) => (
-              <AstrologerCard key={astro.id} item={astro} />
-            ))}
+            {loading ? (
+              <div className="flex flex-col items-center justify-center py-20 gap-3">
+                <span className="w-10 h-10 border-4 border-orange-500 border-t-transparent rounded-full animate-spin"></span>
+                <span className="text-sm text-gray-500 font-medium">Finding online astrologers...</span>
+              </div>
+            ) : astrologers.length === 0 ? (
+              <div className="text-center py-20 text-gray-500 text-sm">
+                No active online astrologers found.
+              </div>
+            ) : (
+              astrologers.map((astro) => (
+                <AstrologerCard key={astro.id} item={astro} />
+              ))
+            )}
           </div>
 
         </div>
