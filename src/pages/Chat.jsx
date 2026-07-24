@@ -115,6 +115,12 @@ export default function Chat() {
       const userObj = JSON.parse(localStorage.getItem("user") || "{}");
       const userId = userObj._id || userObj.id || "";
 
+      console.log("Starting chat request with payload:", {
+        userId,
+        astrologerId: item.id,
+        token: token ? `${token.substring(0, 15)}...` : "missing"
+      });
+
       const response = await fetch("https://kalpjoytish-backend.onrender.com/api/chat/initiate", {
         method: "POST",
         headers: {
@@ -128,6 +134,7 @@ export default function Chat() {
       });
 
       const resData = await response.json();
+      console.log("Chat initiate API response status:", response.status, resData);
 
       if (response.ok && resData.success) {
         // Navigate to the chat session screen, passing the created sessionId
@@ -143,7 +150,7 @@ export default function Chat() {
           alert(resData.message || "Insufficient wallet balance. Please recharge your wallet to start a chat.");
           navigate("/wallet");
         } else {
-          alert(resData.message || "Failed to start chat session.");
+          alert(resData.message || `Failed to start chat session: ${response.statusText}`);
         }
       }
     } catch (error) {
